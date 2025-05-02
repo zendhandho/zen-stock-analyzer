@@ -1,15 +1,17 @@
 import streamlit as st
-from openai import OpenAI
+import OpenAI
 import yfinance as yf
 
 # Initialize OpenAI client
-client = OpenAI(api_key="sk-...")  # 🔐 Replace with your OpenAI key
+import os
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# --- Helper functions ---
-def get_stock_data(ticker_symbol):
-    stock = yf.Ticker(ticker_symbol)
-    info = stock.info
-    return {
+response = openai.ChatCompletion.create(
+  model="gpt-4",
+  messages=[{"role": "user", "content": prompt}],
+  temperature=0.6
+)
+return response.choices[0].message["content"]
         "symbol": ticker_symbol,
         "price": info.get("currentPrice"),
         "pe_ratio": info.get("trailingPE"),
