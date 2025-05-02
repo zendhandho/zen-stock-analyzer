@@ -6,17 +6,15 @@ import openai
 
 # ─── Load Secrets ─────────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_API_KEY")
-YH_API_KEY  = os.getenv("YH_API_KEY")
-YH_API_HOST = os.getenv("YH_API_HOST")  # e.g. "yahoo-finance15.p.rapidapi.com"
+YH_API_KEY    = os.getenv("YH_API_KEY")
+YH_API_HOST   = os.getenv("YH_API_HOST")  # e.g. "yh-finance.p.rapidapi.com"
 
 # ─── Stock Fetcher with Delay, Retry & Cache ─────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker_symbol: str):
     """
-    Fetches real-time quotes from your paid Yahoo Finance (RapidAPI) endpoint:
+    Calls your paid real-time endpoint:
       GET https://{YH_API_HOST}/v1/market/quotes?symbols=<ticker_symbol>
-    Retries up to 3 times on HTTP 429 rate-limit errors, with back-off.
-    Returns a dict or None if still failing.
     """
     url = f"https://{YH_API_HOST}/v1/market/quotes"
     headers = {
@@ -26,14 +24,14 @@ def get_stock_data(ticker_symbol: str):
     params = {"symbols": ticker_symbol}
 
     for attempt in range(1, 4):
-        time.sleep(1)  # space out requests
+        time.sleep(1)  # avoid bursts
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=10)
             resp.raise_for_status()
         except requests.HTTPError:
             if resp.status_code == 429 and attempt < 3:
                 backoff = 5 * attempt
-                st.warning(f"Rate limited (429). Waiting {backoff}s before retry…")
+                st.warning(f"Rate limited—retrying in {backoff}s…")
                 time.sleep(backoff)
                 continue
             return None
@@ -43,13 +41,11 @@ def get_stock_data(ticker_symbol: str):
                 continue
             return None
 
-        payload = resp.json()
-        # Real-time quotes return under "data"
-        results = payload.get("data") or payload.get("quoteResponse", {}).get("result", [])
-        if not results:
+        data = resp.json().get("data")  # this is where real-time quotes usually live
+        if not data:
             return None
 
-        info = results[0]
+        info = data[0]
         return {
             "symbol":         info.get("symbol"),
             "price":          info.get("regularMarketPrice"),
@@ -63,7 +59,7 @@ def get_stock_data(ticker_symbol: str):
 # ─── GPT Analysis ──────────────────────────────────────────────────────────────
 def analyze_with_gpt(stock_data: dict) -> str:
     prompt = f"""
-You are a value investor like Warren Buffett or Mohnish Pabrai. Analyze the following stock:
+You are a value investor like Warren Buffett or Mohnish Pabrai. Analyze:
 
 Ticker: {stock_data['symbol']}
 Price: {stock_data['price']}
@@ -73,36 +69,33 @@ Dividend Yield: {stock_data['dividend_yield']}
 52-Week High: {stock_data['52_week_high']}
 52-Week Low: {stock_data['52_week_low']}
 
-Is this stock undervalued? Share your rationale in simple terms.
+Is this undervalued? Give your rationale simply.
 """
     response = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role":"user","content":prompt}],
         temperature=0.6
     )
     return response.choices[0].message.content
 
 # ─── Streamlit UI ────────────────────────────────────────────────────────────
 def main():
-    st.set_page_config(page_title="Zen Dhandho Stock Analyzer", layout="centered")
+    st.set_page_config(page_title="Zen Dhandho Stock Analyzer")
     st.title("🧘 Zen Dhandho Stock Analyzer")
-    st.markdown("Wall Street-caliber guidance — without the $250K minimum.")
+    st.markdown("Wall Street-caliber guidance — no $250K minimum.")
 
-    ticker = st.text_input("Enter a stock ticker (e.g., AAPL, MSFT, TSLA)")
-
+    ticker = st.text_input("Enter ticker (e.g. AAPL, MSFT, TSLA)")
     if st.button("Analyze"):
         if not ticker:
             st.warning("Please enter a stock ticker.")
-            return
-
-        with st.spinner("Fetching data and analyzing…"):
-            stock_data = get_stock_data(ticker.upper())
-            if stock_data is None:
-                st.error("🚫 Unable to fetch data (empty or rate-limited). Try again shortly.")
-            else:
-                analysis = analyze_with_gpt(stock_data)
-                st.subheader("📊 GPT Analysis")
-                st.write(analysis)
+        else:
+            with st.spinner("Fetching data…"):
+                sd = get_stock_data(ticker.upper())
+                if not sd:
+                    st.error("🚫 Unable to fetch data. Check host/key or try again soon.")
+                else:
+                    st.subheader("📊 GPT Analysis")
+                    st.write(analyze_with_gpt(sd))
 
 if __name__ == "__main__":
     main()
