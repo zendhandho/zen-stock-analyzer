@@ -1,42 +1,29 @@
 import streamlit as st
-import os
-import time
-import requests
-import openai
+import os, time, requests, openai
 
-# ─── Load Secrets ─────────────────────────────────────────────────────────────
+# ─── Load secrets ──────────────────────────────────────────────────────────────
 openai.api_key = os.getenv("OPENAI_API_KEY")
 YH_API_KEY    = os.getenv("YH_API_KEY")
 YH_API_HOST   = os.getenv("YH_API_HOST")  # e.g. "yahoo-finance15.p.rapidapi.com"
 
-# ─── Stock Fetcher with RapidAPI “real-time quotes” ───────────────────────────
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker_symbol: str):
-    """
-    Calls the paid RapidAPI endpoint exactly as in the cURL snippet:
-      GET https://{YH_API_HOST}/api/v1/market/quotes
-        ?ticker=<ticker_symbol>&type=STOCKS
-    Retries on 429, then parses either "quoteResponse" or "data".
-    """
-    url = f"https://{YH_API_HOST}/api/v1/market/quotes"
+    url     = f"https://{YH_API_HOST}/v1/market/quotes"
     headers = {
         "X-RapidAPI-Key":  YH_API_KEY,
         "X-RapidAPI-Host": YH_API_HOST
     }
-    params = {
-        "ticker": ticker_symbol,
-        "type":   "STOCKS"
-    }
+    params = {"symbols": ticker_symbol}
 
     for attempt in range(1, 4):
-        time.sleep(1)  # space out calls
+        time.sleep(1)
         try:
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
-            resp.raise_for_status()
-        except requests.HTTPError as e:
-            if resp.status_code == 429 and attempt < 3:
+            r = requests.get(url, headers=headers, params=params, timeout=10)
+            r.raise_for_status()
+        except requests.HTTPError:
+            if r.status_code == 429 and attempt < 3:
                 backoff = 5 * attempt
-                st.warning(f"Rate limited—retrying in {backoff}s…")
+                st.warning(f"Rate-limited, retry in {backoff}s…")
                 time.sleep(backoff)
                 continue
             return None
@@ -46,21 +33,15 @@ def get_stock_data(ticker_symbol: str):
                 continue
             return None
 
-        payload = resp.json()
-        # first try the RapidAPI “data” array
-        results = payload.get("data")
-        # then try the classic Yahoo style
-        if not results:
-            results = payload.get("quoteResponse", {}).get("result")
-
-        if not results:
+        payload = r.json().get("data", [])
+        if not payload:
             return None
 
-        # sometimes it’s a dict, sometimes a list
-        info = results[0] if isinstance(results, list) else results
+        info = payload[0]
         return {
             "symbol":         info.get("symbol"),
-            "price":          info.get("regularMarketPrice") or info.get("price"),
+            # APICalls.io uses lastPrice
+            "price":          info.get("lastPrice", info.get("regularMarketPrice")),
             "pe_ratio":       info.get("trailingPE"),
             "market_cap":     info.get("marketCap"),
             "dividend_yield": info.get("dividendYield"),
@@ -68,44 +49,40 @@ def get_stock_data(ticker_symbol: str):
             "52_week_low":    info.get("fiftyTwoWeekLow"),
         }
 
-# ─── GPT Analysis ──────────────────────────────────────────────────────────────
-def analyze_with_gpt(stock_data: dict) -> str:
+def analyze_with_gpt(sd: dict) -> str:
     prompt = f"""
-You are a value investor like Warren Buffett or Mohnish Pabrai. Analyze the following stock:
+You are a value investor like Warren Buffett or Mohnish Pabrai. Analyze:
 
-Ticker: {stock_data['symbol']}
-Price: {stock_data['price']}
-P/E Ratio: {stock_data['pe_ratio']}
-Market Cap: {stock_data['market_cap']}
-Dividend Yield: {stock_data['dividend_yield']}
-52-Week High: {stock_data['52_week_high']}
-52-Week Low: {stock_data['52_week_low']}
+Ticker: {sd['symbol']}
+Price: {sd['price']}
+P/E Ratio: {sd['pe_ratio']}
+Market Cap: {sd['market_cap']}
+Dividend Yield: {sd['dividend_yield']}
+52-Week High: {sd['52_week_high']}
+52-Week Low: {sd['52_week_low']}
 
-Is this stock undervalued? Share your rationale in simple terms.
+Is this undervalued? Explain simply.
 """
-    response = openai.ChatCompletion.create(
+    res = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role":"user","content":prompt}],
-        temperature=0.6
-    )
-    return response.choices[0].message.content
+        temperature=0.6)
+    return res.choices[0].message.content
 
-# ─── Streamlit UI ────────────────────────────────────────────────────────────
 def main():
-    st.set_page_config(page_title="Zen Dhandho Stock Analyzer", layout="centered")
+    st.set_page_config(page_title="Zen Dhandho Stock Analyzer")
     st.title("🧘 Zen Dhandho Stock Analyzer")
-    st.markdown("Wall Street-caliber guidance — no $250K minimum.")
+    st.markdown("Wall Street-caliber guidance — without the $250K minimum.")
 
-    ticker = st.text_input("Enter a stock ticker (e.g., AAPL, MSFT, TSLA)")
+    t = st.text_input("Enter a ticker (e.g. AAPL, MSFT)")
     if st.button("Analyze"):
-        if not ticker:
-            st.warning("Please enter a stock ticker.")
+        if not t:
+            st.warning("Please enter a ticker.")
             return
-
-        with st.spinner("Fetching data…"):
-            sd = get_stock_data(ticker.upper())
-            if sd is None:
-                st.error("🚫 Unable to fetch data. Check host/key or retry in a minute.")
+        with st.spinner("Working…"):
+            sd = get_stock_data(t.upper())
+            if not sd:
+                st.error("🚫 Couldn’t fetch live data. Please check host/key or try again in a minute.")
             else:
                 st.subheader("📊 GPT Analysis")
                 st.write(analyze_with_gpt(sd))
