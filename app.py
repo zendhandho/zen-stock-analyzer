@@ -9,50 +9,64 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 YH_API_KEY  = os.getenv("YH_API_KEY")
 YH_API_HOST = os.getenv("YH_API_HOST")  # e.g. "yahoo-finance15.p.rapidapi.com"
 
-# ─── Fetcher: /v1/market/quotes (symbols) with retry, backoff & cache ─────────
+# ─── Fetcher: /api/v1/market/quote with ticker & type ──────────────────────────
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker_symbol: str):
     """
-    Fetches real-time quotes from the paid Yahoo Finance (RapidAPI) endpoint:
-      GET https://{YH_API_HOST}/v1/market/quotes?symbols=<ticker_symbol>
-    Retries on 429 with backoff. Returns dict or None.
+    Fetches a single quote from your paid Yahoo Finance (RapidAPI) endpoint:
+      GET https://{YH_API_HOST}/api/v1/market/quote
+        ?ticker=<symbol>&type=STOCKS
+
+    Retries on 429 with back-off. Returns dict or None.
     """
-    url = f"https://{YH_API_HOST}/v1/market/quotes"
+    url = f"https://{YH_API_HOST}/api/v1/market/quote"
     headers = {
         "X-RapidAPI-Key":  YH_API_KEY,
         "X-RapidAPI-Host": YH_API_HOST
     }
-    params = {"symbols": ticker_symbol}
+    params = {
+        "ticker": ticker_symbol,
+        "type":   "STOCKS"
+    }
 
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
+    for attempt in range(1, 4):
         time.sleep(1)  # space out requests
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=10)
             resp.raise_for_status()
         except requests.HTTPError:
-            if resp.status_code == 429 and attempt < max_attempts:
+            if resp.status_code == 429 and attempt < 3:
                 backoff = 5 * attempt
-                st.warning(f"Rate limited (429). Waiting {backoff}s before retry…")
+                st.warning(f"Rate-limited (429). Waiting {backoff}s…")
                 time.sleep(backoff)
                 continue
             return None
         except Exception:
-            if attempt < max_attempts:
+            if attempt < 3:
                 time.sleep(5)
                 continue
             return None
 
         payload = resp.json()
-        # The real-time quotes endpoint returns under "data"
-        results = payload.get("data") or payload.get("quoteResponse", {}).get("result", [])
+        # Try all the common spots for the quote array
+        results = (
+            payload.get("data") or
+            payload.get("quoteResponse", {}).get("result") or
+            payload.get("result") or
+            payload.get("quote")   # sometimes a single object
+        )
         if not results:
             return None
 
-        info = results[0]
+        # If it’s a dict—not a list—wrap it
+        if isinstance(results, dict):
+            info = results
+        else:
+            info = results[0]
+
         return {
             "symbol":         info.get("symbol"),
-            "price":          info.get("regularMarketPrice"),
+            "price":          info.get("regularMarketPrice") or info.get("price"),
             "pe_ratio":       info.get("trailingPE"),
             "market_cap":     info.get("marketCap"),
             "dividend_yield": info.get("dividendYield"),
@@ -89,18 +103,17 @@ def main():
     st.markdown("Wall Street-caliber guidance — without the $250K minimum.")
 
     ticker = st.text_input("Enter a stock ticker (e.g., AAPL, MSFT, TSLA)")
-
     if st.button("Analyze"):
         if not ticker:
             st.warning("Please enter a stock ticker.")
             return
 
         with st.spinner("Fetching data and analyzing…"):
-            stock_data = get_stock_data(ticker.upper())
-            if stock_data is None:
+            data = get_stock_data(ticker.upper())
+            if data is None:
                 st.error("🚫 Unable to fetch data (empty or rate-limited). Try again shortly.")
             else:
-                analysis = analyze_with_gpt(stock_data)
+                analysis = analyze_with_gpt(data)
                 st.subheader("📊 GPT Analysis")
                 st.write(analysis)
 
