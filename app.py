@@ -1,17 +1,15 @@
 import streamlit as st
-import OpenAI
+import os
+import openai
 import yfinance as yf
 
-# Initialize OpenAI client
-import os
+# Read your API key from the Streamlit secret
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-response = openai.ChatCompletion.create(
-  model="gpt-4",
-  messages=[{"role": "user", "content": prompt}],
-  temperature=0.6
-)
-return response.choices[0].message["content"]
+def get_stock_data(ticker_symbol):
+    stock = yf.Ticker(ticker_symbol)
+    info = stock.info
+    return {
         "symbol": ticker_symbol,
         "price": info.get("currentPrice"),
         "pe_ratio": info.get("trailingPE"),
@@ -23,7 +21,7 @@ return response.choices[0].message["content"]
 
 def analyze_with_gpt(stock_data):
     prompt = f"""
-You are a value investor like Warren Buffett or Monish Pabrai. Analyze the following stock:
+You are a value investor like Warren Buffett or Mohnish Pabrai. Analyze the following stock:
 
 Ticker: {stock_data['symbol']}
 Price: {stock_data['price']}
@@ -35,26 +33,30 @@ Dividend Yield: {stock_data['dividend_yield']}
 
 Is this stock undervalued? Share your rationale in simple terms.
 """
-    response = client.chat.completions.create(
+    response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.6
     )
+    # v0.28 style: response.choices[0].message.content
     return response.choices[0].message.content
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Zen Dhandho Stock Analyzer", layout="centered")
-st.title("🧘 Zen Dhandho Stock Analyzer")
-st.markdown("Wall Street-caliber guidance — without the $250K minimum.")
+def main():
+    st.set_page_config(page_title="Zen Dhandho Stock Analyzer", layout="centered")
+    st.title("🧘 Zen Dhandho Stock Analyzer")
+    st.markdown("Wall Street-caliber guidance — without the $250K minimum.")
 
-ticker = st.text_input("Enter a stock ticker (e.g., AAPL, MSFT, TSLA)")
+    ticker = st.text_input("Enter a stock ticker (e.g., AAPL, MSFT, TSLA)")
 
-if st.button("Analyze"):
-    if not ticker:
-        st.warning("Please enter a stock ticker.")
-    else:
-        with st.spinner("Fetching data and analyzing..."):
-            stock_data = get_stock_data(ticker.upper())
-            analysis = analyze_with_gpt(stock_data)
-        st.subheader("📊 GPT Analysis")
-        st.write(analysis)
+    if st.button("Analyze"):
+        if not ticker:
+            st.warning("Please enter a stock ticker.")
+        else:
+            with st.spinner("Fetching data and analyzing..."):
+                stock_data = get_stock_data(ticker.upper())
+                analysis = analyze_with_gpt(stock_data)
+            st.subheader("📊 GPT Analysis")
+            st.write(analysis)
+
+if __name__ == "__main__":
+    main()
